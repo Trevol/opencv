@@ -141,6 +141,8 @@ TEST_P(Test_Caffe_layers, Convolution)
 
 TEST_P(Test_Caffe_layers, DeConvolution)
 {
+    if(target == DNN_TARGET_CUDA_FP16)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_CUDA_FP16);
     testLayerUsingCaffeModels("layer_deconvolution", true, false);
 }
 
@@ -372,7 +374,13 @@ TEST_P(Test_Caffe_layers, Conv_Elu)
     net.setPreferableTarget(target);
     Mat out = net.forward();
 
-    normAssert(ref, out, "", default_l1, default_lInf);
+    double l1 = default_l1, lInf = default_lInf;
+    if (target == DNN_TARGET_CUDA_FP16)
+    {
+        l1 = 0.0002;
+        lInf = 0.0005;
+    }
+    normAssert(ref, out, "", l1, lInf);
 }
 
 class Layer_LSTM_Test : public ::testing::Test
@@ -843,6 +851,11 @@ TEST_P(Test_Caffe_layers, PriorBox_repeated)
 
     double l1 = (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_MYRIAD) ? 1e-3 : 1e-5;
     double lInf = (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_MYRIAD) ? 1e-3 : 1e-4;
+    if (target == DNN_TARGET_CUDA_FP16)
+    {
+        l1 = 7e-5;
+        lInf = 0.0005;
+    }
     normAssert(out, ref, "", l1, lInf);
 }
 
@@ -851,6 +864,8 @@ TEST_P(Test_Caffe_layers, PriorBox_squares)
 {
     if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && target == DNN_TARGET_MYRIAD)
         applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD, CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH && target == DNN_TARGET_MYRIAD)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_MYRIAD, CV_TEST_TAG_DNN_SKIP_IE_NGRAPH);
     LayerParams lp;
     lp.name = "testPriorBox";
     lp.type = "PriorBox";
@@ -876,7 +891,9 @@ TEST_P(Test_Caffe_layers, PriorBox_squares)
                                        0.25, 0.0, 1.0, 1.0,
                                        0.1f, 0.1f, 0.2f, 0.2f,
                                        0.1f, 0.1f, 0.2f, 0.2f);
-    double l1 = (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_MYRIAD) ? 2e-5 : 1e-5;
+    double l1 = 1e-5;
+    if (target == DNN_TARGET_OPENCL_FP16 || target == DNN_TARGET_MYRIAD || target == DNN_TARGET_CUDA_FP16)
+        l1 = 2e-5;
     normAssert(out.reshape(1, 4), ref, "", l1);
 }
 
@@ -1225,6 +1242,11 @@ TEST_P(Test_DLDT_two_inputs, as_backend)
     // Output values are in range [0, 637.5].
     double l1 = (targetId == DNN_TARGET_OPENCL_FP16 || targetId == DNN_TARGET_MYRIAD) ? 0.06 : 1e-6;
     double lInf = (targetId == DNN_TARGET_OPENCL_FP16 || targetId == DNN_TARGET_MYRIAD) ? 0.3 : 1e-5;
+    if (targetId == DNN_TARGET_CUDA_FP16)
+    {
+        l1 = 0.06;
+        lInf = 0.3;
+    }
     normAssert(out, ref, "", l1, lInf);
 }
 
@@ -1281,7 +1303,7 @@ static void test_dldt_fused_output(Backend backend, Target target)
     }
     net.setPreferableBackend(backend);
     net.setPreferableTarget(target);
-    net.setInput(Mat({1, 1, 1, 1}, CV_32FC1, Scalar(1)));
+    net.setInput(Mat({1, 1, 2, 3}, CV_32FC1, Scalar(1)));
     net.forward();
 }
 
@@ -1320,7 +1342,7 @@ TEST_P(Test_DLDT_layers, multiple_networks)
         nets[i].addLayerToPrev(lp.name, lp.type, lp);
         nets[i].setPreferableBackend(backend);
         nets[i].setPreferableTarget(target);
-        nets[i].setInput(Mat({1, 1, 1, 1}, CV_32FC1, Scalar(1)));
+        nets[i].setInput(Mat({1, 1, 2, 3}, CV_32FC1, Scalar(1)));
     }
     Mat out_1 = nets[0].forward();
     Mat out_2 = nets[1].forward();
@@ -1537,8 +1559,17 @@ TEST_P(Layer_Test_ShuffleChannel, Accuracy)
     net.setPreferableTarget(targetId);
     Mat out = net.forward();
 
-    double l1 = (targetId == DNN_TARGET_OPENCL_FP16) ? 5e-2 : 1e-5;
-    double lInf = (targetId == DNN_TARGET_OPENCL_FP16) ? 7e-2 : 1e-4;
+    double l1 = 1e-5, lInf = 1e-4;
+    if (targetId == DNN_TARGET_OPENCL_FP16)
+    {
+        l1 = 5e-2;
+        lInf = 7e-2;
+    }
+    else if (targetId == DNN_TARGET_CUDA_FP16)
+    {
+        l1 = 0.06;
+        lInf = 0.07;
+    }
     for (int n = 0; n < inpShapeVec[0]; ++n)
     {
         for (int c = 0; c < inpShapeVec[1]; ++c)
@@ -1592,6 +1623,9 @@ TEST_P(Layer_Test_Eltwise_unequal, accuracy_input_0_truncate)
     bool weighted = get<0>(GetParam());
     int backendId = get<0>(get<1>(GetParam()));
     int targetId = get<1>(get<1>(GetParam()));
+
+    if (backendId == DNN_BACKEND_CUDA)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_CUDA);
 
     Net net;
     LayerParams lp;
@@ -1655,6 +1689,9 @@ TEST_P(Layer_Test_Eltwise_unequal, accuracy_input_0)
     bool weighted = get<0>(GetParam());
     int backendId = get<0>(get<1>(GetParam()));
     int targetId = get<1>(get<1>(GetParam()));
+
+    if (backendId == DNN_BACKEND_CUDA)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_CUDA);
 
     Net net;
     LayerParams lp;
