@@ -335,6 +335,19 @@ TEST_P(Test_ONNX_layers, Padding)
 TEST_P(Test_ONNX_layers, Resize)
 {
     testONNXModels("resize_nearest");
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
+    testONNXModels("resize_bilinear");
+}
+
+TEST_P(Test_ONNX_layers, ResizeUnfused)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
+    testONNXModels("upsample_unfused_torch1.2");
+    testONNXModels("upsample_unfused_opset9_torch1.4");
+    testONNXModels("resize_nearest_unfused_opset11_torch1.4");
+    testONNXModels("resize_nearest_unfused_opset11_torch1.3");
 }
 
 TEST_P(Test_ONNX_layers, MultyInputs)
@@ -394,6 +407,8 @@ TEST_P(Test_ONNX_layers, DynamicReshape)
         if (target == DNN_TARGET_OPENCL)      applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_OPENCL, CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
     }
     testONNXModels("dynamic_reshape");
+    testONNXModels("dynamic_reshape_opset_11");
+    testONNXModels("flatten_by_prod");
 }
 
 TEST_P(Test_ONNX_layers, Reshape)
@@ -409,6 +424,18 @@ TEST_P(Test_ONNX_layers, Squeeze)
 TEST_P(Test_ONNX_layers, ReduceL2)
 {
     testONNXModels("reduceL2");
+}
+
+TEST_P(Test_ONNX_layers, Split)
+{
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NN_BUILDER);
+    if (backend == DNN_BACKEND_INFERENCE_ENGINE_NGRAPH)
+        applyTestTag(CV_TEST_TAG_DNN_SKIP_IE_NGRAPH);
+    testONNXModels("split_1");
+    testONNXModels("split_2");
+    testONNXModels("split_3");
+    testONNXModels("split_4");
 }
 
 TEST_P(Test_ONNX_layers, Slice)
@@ -446,7 +473,12 @@ public:
 
 TEST_P(Test_ONNX_nets, Alexnet)
 {
+#if defined(OPENCV_32BIT_CONFIGURATION) && defined(HAVE_OPENCL)
+    applyTestTag(CV_TEST_TAG_MEMORY_2GB);
+#else
     applyTestTag(target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB);
+#endif
+
     const String model =  _tf("models/alexnet.onnx", false);
 
     Net net = readNetFromONNX(model);
@@ -505,7 +537,12 @@ TEST_P(Test_ONNX_nets, Googlenet)
 
 TEST_P(Test_ONNX_nets, CaffeNet)
 {
+#if defined(OPENCV_32BIT_CONFIGURATION) && defined(HAVE_OPENCL)
+    applyTestTag(CV_TEST_TAG_MEMORY_2GB);
+#else
     applyTestTag(target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB);
+#endif
+
 #if defined(INF_ENGINE_RELEASE) && INF_ENGINE_VER_MAJOR_EQ(2019030000)
     if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && target == DNN_TARGET_MYRIAD
         && getInferenceEngineVPUType() == CV_DNN_INFERENCE_ENGINE_VPU_TYPE_MYRIAD_X)
@@ -516,7 +553,12 @@ TEST_P(Test_ONNX_nets, CaffeNet)
 
 TEST_P(Test_ONNX_nets, RCNN_ILSVRC13)
 {
+#if defined(OPENCV_32BIT_CONFIGURATION) && defined(HAVE_OPENCL)
+    applyTestTag(CV_TEST_TAG_MEMORY_2GB);
+#else
     applyTestTag(target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB);
+#endif
+
 #if defined(INF_ENGINE_RELEASE) && INF_ENGINE_VER_MAJOR_EQ(2019030000)
     if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019 && target == DNN_TARGET_MYRIAD
         && getInferenceEngineVPUType() == CV_DNN_INFERENCE_ENGINE_VPU_TYPE_MYRIAD_X)
@@ -628,7 +670,11 @@ TEST_P(Test_ONNX_nets, MobileNet_v2)
 TEST_P(Test_ONNX_nets, LResNet100E_IR)
 {
     applyTestTag(
+#if defined(OPENCV_32BIT_CONFIGURATION) && defined(HAVE_OPENCL)
+        CV_TEST_TAG_MEMORY_2GB,
+#else
         (target == DNN_TARGET_CPU ? CV_TEST_TAG_MEMORY_512MB : CV_TEST_TAG_MEMORY_1GB),
+#endif
         CV_TEST_TAG_DEBUG_LONG
     );
     if (backend == DNN_BACKEND_INFERENCE_ENGINE_NN_BUILDER_2019)
