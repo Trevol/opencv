@@ -144,9 +144,6 @@ _InputArray::_InputArray(const Mat_<_Tp>& m)
 inline _InputArray::_InputArray(const double& val)
 { init(FIXED_TYPE + FIXED_SIZE + MATX + CV_64F + ACCESS_READ, &val, Size(1,1)); }
 
-inline _InputArray::_InputArray(const MatExpr& expr)
-{ init(FIXED_TYPE + FIXED_SIZE + EXPR + ACCESS_READ, &expr); }
-
 inline _InputArray::_InputArray(const cuda::GpuMat& d_mat)
 { init(CUDA_GPU_MAT + ACCESS_READ, &d_mat); }
 
@@ -1269,6 +1266,8 @@ const _Tp& Mat::at(const Vec<int, n>& idx) const
 template<typename _Tp> inline
 MatConstIterator_<_Tp> Mat::begin() const
 {
+    if (empty())
+        return MatConstIterator_<_Tp>();
     CV_DbgAssert( elemSize() == sizeof(_Tp) );
     return MatConstIterator_<_Tp>((const Mat_<_Tp>*)this);
 }
@@ -1276,6 +1275,8 @@ MatConstIterator_<_Tp> Mat::begin() const
 template<typename _Tp> inline
 MatConstIterator_<_Tp> Mat::end() const
 {
+    if (empty())
+        return MatConstIterator_<_Tp>();
     CV_DbgAssert( elemSize() == sizeof(_Tp) );
     MatConstIterator_<_Tp> it((const Mat_<_Tp>*)this);
     it += total();
@@ -1285,6 +1286,8 @@ MatConstIterator_<_Tp> Mat::end() const
 template<typename _Tp> inline
 MatIterator_<_Tp> Mat::begin()
 {
+    if (empty())
+        return MatIterator_<_Tp>();
     CV_DbgAssert( elemSize() == sizeof(_Tp) );
     return MatIterator_<_Tp>((Mat_<_Tp>*)this);
 }
@@ -1292,6 +1295,8 @@ MatIterator_<_Tp> Mat::begin()
 template<typename _Tp> inline
 MatIterator_<_Tp> Mat::end()
 {
+    if (empty())
+        return MatIterator_<_Tp>();
     CV_DbgAssert( elemSize() == sizeof(_Tp) );
     MatIterator_<_Tp> it((Mat_<_Tp>*)this);
     it += total();
@@ -2640,6 +2645,7 @@ MatConstIterator::MatConstIterator(const Mat* _m)
 {
     if( m && m->isContinuous() )
     {
+        CV_Assert(!m->empty());
         sliceStart = m->ptr();
         sliceEnd = sliceStart + m->total()*elemSize;
     }
@@ -2653,6 +2659,7 @@ MatConstIterator::MatConstIterator(const Mat* _m, int _row, int _col)
     CV_Assert(m && m->dims <= 2);
     if( m->isContinuous() )
     {
+        CV_Assert(!m->empty());
         sliceStart = m->ptr();
         sliceEnd = sliceStart + m->total()*elemSize;
     }
@@ -2667,6 +2674,7 @@ MatConstIterator::MatConstIterator(const Mat* _m, Point _pt)
     CV_Assert(m && m->dims <= 2);
     if( m->isContinuous() )
     {
+        CV_Assert(!m->empty());
         sliceStart = m->ptr();
         sliceEnd = sliceStart + m->total()*elemSize;
     }
@@ -3988,6 +3996,9 @@ inline void UMatData::markDeviceCopyObsolete(bool flag)
 }
 
 //! @endcond
+
+static inline
+void swap(MatExpr& a, MatExpr& b) { a.swap(b); }
 
 } //cv
 

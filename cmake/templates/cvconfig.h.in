@@ -81,6 +81,7 @@
 #cmakedefine HAVE_IPP_IW_LL
 
 /* JPEG-2000 codec */
+#cmakedefine HAVE_OPENJPEG
 #cmakedefine HAVE_JASPER
 
 /* IJG JPEG codec */
@@ -94,6 +95,8 @@
 
 /* NVIDIA Video Decoding API*/
 #cmakedefine HAVE_NVCUVID
+#cmakedefine HAVE_NVCUVID_HEADER
+#cmakedefine HAVE_DYNLINK_NVCUVID_HEADER
 
 /* NVIDIA Video Encoding API*/
 #cmakedefine HAVE_NVCUVENC

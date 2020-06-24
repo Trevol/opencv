@@ -18,6 +18,7 @@
 #include "opencv2/stitching/warpers.hpp"
 
 #ifdef HAVE_OPENCV_XFEATURES2D
+#include "opencv2/xfeatures2d.hpp"
 #include "opencv2/xfeatures2d/nonfree.hpp"
 #endif
 
@@ -430,10 +431,11 @@ int main(int argc, char* argv[])
     {
         finder = xfeatures2d::SURF::create();
     }
-    else if (features_type == "sift") {
-        finder = xfeatures2d::SIFT::create();
-    }
 #endif
+    else if (features_type == "sift")
+    {
+        finder = SIFT::create();
+    }
     else
     {
         cout << "Unknown 2D features type: '" << features_type << "'.\n";

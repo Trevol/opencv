@@ -11,7 +11,6 @@
 #include "cuda4dnn/csl/cudnn.hpp"
 #include "cuda4dnn/csl/tensor.hpp"
 #include "cuda4dnn/csl/memory.hpp"
-#include "cuda4dnn/csl/fp16.hpp"
 #include "cuda4dnn/csl/workspace.hpp"
 #include "cuda4dnn/kernels/fp_conversion.hpp"
 #endif
@@ -308,7 +307,18 @@ namespace cv { namespace dnn {
 
             auto numel = total(shape_);
             if (numel > shared_block->device.size())
+            {
+                /* if the host memory was already page-locked, release it and register again with the new size */
+                shared_block->memGuard = cuda4dnn::csl::MemoryLockGuard();
+                try {
+                    CV_Assert(shared_block->host.type() == CV_32F);
+                    shared_block->memGuard = cuda4dnn::csl::MemoryLockGuard(shared_block->host.data, numel * sizeof(float));
+                } catch (...) {
+                    /* a common reason for failure is that the host system (for example, a Jetson device) does not support it */
+                    /* we ignore the failure as this is just an optimization and not a requirement */
+                }
                 shared_block->device.reset(numel);
+            }
         }
 
         static Ptr<BackendWrapper> create(Mat& m) {

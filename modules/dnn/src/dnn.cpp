@@ -114,7 +114,7 @@ public:
     {
 #if INF_ENGINE_VER_MAJOR_GE(INF_ENGINE_RELEASE_2019R3)
         // Lightweight detection
-        const std::vector<std::string> devices = getCore().GetAvailableDevices();
+        const std::vector<std::string> devices = getCore("").GetAvailableDevices();
         for (std::vector<std::string>::const_iterator i = devices.begin(); i != devices.end(); ++i)
         {
             if (std::string::npos != i->find("MYRIAD") && target == DNN_TARGET_MYRIAD)
@@ -1141,17 +1141,26 @@ static Ptr<BackendWrapper> wrapMat(int backendId, int targetId, cv::Mat& m)
 
 static int g_networkId = 0;
 
-struct Net::Impl
+detail::NetImplBase::NetImplBase()
+    : networkId(CV_XADD(&g_networkId, 1))
+    , networkDumpCounter(0)
+    , dumpLevel(DNN_NETWORK_DUMP)
+{
+    // nothing
+}
+
+std::string detail::NetImplBase::getDumpFileNameBase()
+{
+    std::string dumpFileNameBase = cv::format("ocv_dnn_net_%05d_%02d", networkId, networkDumpCounter++);
+    return dumpFileNameBase;
+}
+
+struct Net::Impl : public detail::NetImplBase
 {
     typedef std::map<int, LayerShapes> LayersShapesMap;
     typedef std::map<int, LayerData> MapIdToLayerData;
 
-    const int networkId; // network global identifier
-    int networkDumpCounter; // dump counter
-
     Impl()
-        : networkId(CV_XADD(&g_networkId, 1))
-        , networkDumpCounter(0)
     {
         //allocate fake net input layer
         netInputLayer = Ptr<DataLayer>(new DataLayer());
@@ -1277,6 +1286,13 @@ struct Net::Impl
         }
 
         Ptr<BackendWrapper> wrapper = wrapMat(preferableBackend, preferableTarget, host);
+#ifdef HAVE_CUDA
+        if (preferableBackend == DNN_BACKEND_CUDA)
+        {
+            auto cudaWrapper = wrapper.dynamicCast<CUDABackendWrapper>();
+            cudaWrapper->setStream(cudaInfo->context.stream);
+        }
+#endif
         backendWrappers[data] = wrapper;
         return wrapper;
     }
@@ -1359,7 +1375,7 @@ struct Net::Impl
     {
         CV_TRACE_FUNCTION();
 
-        if (DNN_NETWORK_DUMP > 0 && networkDumpCounter == 0)
+        if (dumpLevel && networkDumpCounter == 0)
         {
             dumpNetworkToFile();
         }
@@ -1463,7 +1479,7 @@ struct Net::Impl
 
             netWasAllocated = true;
 
-            if (DNN_NETWORK_DUMP > 0)
+            if (dumpLevel)
             {
                 dumpNetworkToFile();
             }
@@ -1757,6 +1773,7 @@ struct Net::Impl
 
             Ptr<InfEngineBackendNode> ieNode = node.dynamicCast<InfEngineBackendNode>();
             CV_Assert(!ieNode.empty());
+            ieNode->net->reset();
 
             for (it = layers.begin(); it != layers.end(); ++it)
             {
@@ -2058,6 +2075,7 @@ struct Net::Impl
 
             Ptr<InfEngineNgraphNode> ieNode = node.dynamicCast<InfEngineNgraphNode>();
             CV_Assert(!ieNode.empty());
+            ieNode->net->reset();
 
             for (it = layers.begin(); it != layers.end(); ++it)
             {
@@ -2140,6 +2158,7 @@ struct Net::Impl
                         Ptr<BackendNode> inpNode = inpLd.backendNodes[preferableBackend];
                         if (!inpNode.empty()) {
                             Ptr<InfEngineNgraphNode> ieNode = inpNode.dynamicCast<InfEngineNgraphNode>();
+                            CV_Assert(!ieNode.empty());
                             ieNode->net->setUnconnectedNodes(ieNode);
                         }
                     }
@@ -2169,7 +2188,7 @@ struct Net::Impl
                 }
 
                 if (net.empty()) {
-                    net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet());
+                    net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet(*this));
                 }
 
                 if (!fused) {
@@ -2184,6 +2203,7 @@ struct Net::Impl
                         int cons_inp = cons->oid;
                         Ptr<NgraphBackendWrapper> inpWrapper = inpLd.outputBlobsWrappers[cons_inp].
                                                                      dynamicCast<NgraphBackendWrapper>();
+                        CV_Assert(!inpWrapper.empty());
                         auto iter = std::find(inputNames.begin(), inputNames.end(),
                                               inpWrapper->dataPtr->getName());
                         if (iter == inputNames.end()) {
@@ -2213,7 +2233,7 @@ struct Net::Impl
                 }
             }
             else {
-                net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet());
+                net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet(*this));
             }
 
             if (!fused)
@@ -2228,7 +2248,11 @@ struct Net::Impl
 
                     auto ieInpNode = inputNodes[i].dynamicCast<InfEngineNgraphNode>();
                     CV_Assert(oid < ieInpNode->node->get_output_size());
+#if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2020_3)
+                    inputNodes[i] = Ptr<BackendNode>(new InfEngineNgraphNode(ieInpNode->node->get_output_as_single_output_node(oid)));
+#else
                     inputNodes[i] = Ptr<BackendNode>(new InfEngineNgraphNode(ieInpNode->node->get_output_as_single_output_node(oid, false)));
+#endif
                 }
 
                 if (layer->supportBackend(preferableBackend))
@@ -2408,16 +2432,7 @@ struct Net::Impl
             ninputs = netInputLayer->inputsData.size();
             ld.inputBlobsWrappers.resize(ninputs);
             for (size_t i = 0; i < ninputs; i++)
-            {
                 ld.inputBlobsWrappers[i] = wrap(netInputLayer->inputsData[i]);
-#ifdef HAVE_CUDA
-                if (IS_DNN_CUDA_TARGET(preferableTarget))
-                {
-                    auto wrapper = ld.inputBlobsWrappers[i].dynamicCast<CUDABackendWrapper>();
-                    wrapper->setStream(cudaInfo->context.stream);
-                }
-#endif
-            }
         }
         else
         {
@@ -2443,23 +2458,12 @@ struct Net::Impl
                                           preferableTarget == DNN_TARGET_OPENCL_FP16);
         ld.outputBlobsWrappers.resize(ld.outputBlobs.size());
         for (int i = 0; i < ld.outputBlobs.size(); ++i)
-        {
             ld.outputBlobsWrappers[i] = wrap(ld.outputBlobs[i]);
-#ifdef HAVE_CUDA
-            if (IS_DNN_CUDA_TARGET(preferableTarget))
-            {
-                auto wrapper = ld.outputBlobsWrappers[i].dynamicCast<CUDABackendWrapper>();
-                wrapper->setStream(cudaInfo->context.stream);
-            }
-#endif
-        }
 
         /* CUDA backend has its own system for internal blobs; we don't need these */
         ld.internalBlobsWrappers.resize((preferableBackend == DNN_BACKEND_CUDA) ? 0 : ld.internals.size());
         for (int i = 0; i < ld.internalBlobsWrappers.size(); ++i)
-        {
             ld.internalBlobsWrappers[i] = wrap(ld.internals[i]);
-        }
 
         Ptr<Layer> layerPtr = ld.getLayerInstance();
         {
@@ -2578,16 +2582,6 @@ struct Net::Impl
                         nextData->type != "ReLU6" &&
                         nextData->type != "TanH" &&
                         nextData->type != "Power")
-                        break;
-
-                    if (IS_DNN_CUDA_TARGET(preferableTarget) &&
-                        nextData->type != "ReLU" &&
-                        nextData->type != "ReLU6" &&
-                        nextData->type != "Power" &&
-                        nextData->type != "TanH" &&
-                        nextData->type != "Sigmoid" &&
-                        nextData->type != "Swish" &&
-                        nextData->type != "Mish")
                         break;
 
                     Ptr<ActivationLayer> nextActivLayer = nextData->layerInstance.dynamicCast<ActivationLayer>();
@@ -3423,7 +3417,8 @@ struct Net::Impl
     void dumpNetworkToFile()
     {
 #ifndef OPENCV_DNN_DISABLE_NETWORK_AUTO_DUMP
-        String dumpFileName = cv::format("ocv_dnn_net_%05d_%02d.dot", networkId, networkDumpCounter++);
+        string dumpFileNameBase = getDumpFileNameBase();
+        string dumpFileName = dumpFileNameBase + ".dot";
         try
         {
             string dumpStr = dump();
@@ -3454,6 +3449,8 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
 {
     CV_TRACE_FUNCTION();
 
+    CV_TRACE_REGION("register_inputs");
+
     std::vector<String> inputsNames;
     std::vector<MatShape> inp_shapes;
     for (auto& it : ieNet.getInputsInfo())
@@ -3472,13 +3469,15 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
         cvNet.setInputShape(inputsNames[inp_id], inp_shapes[inp_id]);
     }
 
+    CV_TRACE_REGION_NEXT("backendNode");
+
     Ptr<BackendNode> backendNode;
 #ifdef HAVE_DNN_NGRAPH
     if (DNN_BACKEND_INFERENCE_ENGINE_NGRAPH == getInferenceEngineBackendTypeParam())
     {
         auto fake_node = std::make_shared<ngraph::op::Parameter>(ngraph::element::f32, ngraph::Shape{});
         Ptr<InfEngineNgraphNode> backendNodeNGraph(new InfEngineNgraphNode(fake_node));
-        backendNodeNGraph->net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet(ieNet));
+        backendNodeNGraph->net = Ptr<InfEngineNgraphNet>(new InfEngineNgraphNet(*(cvNet.impl), ieNet));
         backendNode = backendNodeNGraph;
     }
     else
@@ -3493,8 +3492,26 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
 #endif
     }
 
+    CV_TRACE_REGION_NEXT("register_outputs");
+
+#ifdef HAVE_DNN_NGRAPH
+    auto ngraphFunction = ieNet.getFunction();
+#if INF_ENGINE_VER_MAJOR_LT(INF_ENGINE_RELEASE_2020_2)
+    std::list< std::shared_ptr<ngraph::Node> > ngraphOperations;
+#else
+    std::vector< std::shared_ptr<ngraph::Node> > ngraphOperations;
+#endif
+    if (ngraphFunction)
+    {
+        ngraphOperations = ngraphFunction->get_ops();
+    }
+#endif
+
     for (auto& it : ieNet.getOutputsInfo())
     {
+        CV_TRACE_REGION("output");
+        const auto& outputName = it.first;
+
         LayerParams lp;
         int lid = cvNet.addLayer(it.first, "", lp);
 
@@ -3504,14 +3521,60 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
         if (DNN_BACKEND_INFERENCE_ENGINE_NGRAPH == getInferenceEngineBackendTypeParam())
         {
             Ptr<Layer> cvLayer(new NgraphBackendLayer(ieNet));
+            cvLayer->name = outputName;
+            cvLayer->type = "_unknown_";
 
-            InferenceEngine::CNNLayerPtr ieLayer = ieNet.getLayerByName(it.first.c_str());
-            CV_Assert(ieLayer);
+            auto process_layer = [&](const std::string& name) -> bool
+            {
+                if (ngraphFunction)
+                {
+                    CV_TRACE_REGION("ngraph_function");
+                    for (const auto& op : ngraphOperations)
+                    {
+                        CV_Assert(op);
+                        if (op->get_friendly_name() == name)
+                        {
+                            const std::string typeName = op->get_type_info().name;
+                            cvLayer->type = typeName;
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+                else
+                {
+                    CV_TRACE_REGION("legacy_cnn_layer");
+                    try
+                    {
+                        InferenceEngine::CNNLayerPtr ieLayer = ieNet.getLayerByName(name.c_str());
+                        CV_Assert(ieLayer);
 
-            cvLayer->name = it.first;
-            cvLayer->type = ieLayer->type;
+                        cvLayer->type = ieLayer->type;
+                        return true;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        CV_UNUSED(e);
+                        CV_LOG_DEBUG(NULL, "IE layer extraction failure: '" << name << "' - " << e.what());
+                        return false;
+                    }
+                }
+            };
+
+            bool found = process_layer(outputName);
+            if (!found)
+            {
+                auto pos = outputName.rfind('.');  // cut port number: ".0"
+                if (pos != std::string::npos)
+                {
+                    std::string layerName = outputName.substr(0, pos);
+                    found = process_layer(layerName);
+                }
+            }
+            if (!found)
+                CV_LOG_WARNING(NULL, "DNN/IE: Can't determine output layer type: '" << outputName << "'");
+
             ld.layerInstance = cvLayer;
-
             ld.backendNodes[DNN_BACKEND_INFERENCE_ENGINE_NGRAPH] = backendNode;
         }
         else
@@ -3520,10 +3583,23 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
 #ifdef HAVE_DNN_IE_NN_BUILDER_2019
             Ptr<Layer> cvLayer(new InfEngineBackendLayer(ieNet));
 
-            InferenceEngine::CNNLayerPtr ieLayer = ieNet.getLayerByName(it.first.c_str());
+            InferenceEngine::CNNLayerPtr ieLayer;
+            try
+            {
+                ieLayer = ieNet.getLayerByName(outputName.c_str());
+            }
+            catch (...)
+            {
+                auto pos = outputName.rfind('.');  // cut port number: ".0"
+                if (pos != std::string::npos)
+                {
+                    std::string layerName = outputName.substr(0, pos);
+                    ieLayer = ieNet.getLayerByName(layerName.c_str());
+                }
+            }
             CV_Assert(ieLayer);
 
-            cvLayer->name = it.first;
+            cvLayer->name = outputName;
             cvLayer->type = ieLayer->type;
             ld.layerInstance = cvLayer;
 
@@ -3536,6 +3612,9 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
         for (int i = 0; i < inputsNames.size(); ++i)
             cvNet.connect(0, i, lid, i);
     }
+
+    CV_TRACE_REGION_NEXT("finalize");
+
     cvNet.setPreferableBackend(getInferenceEngineBackendTypeParam());
 
     cvNet.impl->skipInfEngineInit = true;
@@ -3557,7 +3636,7 @@ Net Net::readFromModelOptimizer(const String& xml, const String& bin)
 
     InferenceEngine::CNNNetwork ieNet = reader.getNetwork();
 #else
-    InferenceEngine::Core& ie = getCore();
+    InferenceEngine::Core& ie = getCore("");
     InferenceEngine::CNNNetwork ieNet = ie.ReadNetwork(xml, bin);
 #endif
 
@@ -3606,7 +3685,7 @@ Net Net::readFromModelOptimizer(
 
     InferenceEngine::CNNNetwork ieNet = reader.getNetwork();
 #else
-    InferenceEngine::Core& ie = getCore();
+    InferenceEngine::Core& ie = getCore("");
 
     std::string model; model.assign((char*)bufferModelConfigPtr, bufferModelConfigSize);
 
@@ -4952,16 +5031,15 @@ void LayerFactory::registerLayer(const String &type, Constructor constructor)
     CV_TRACE_ARG_VALUE(type, "type", type.c_str());
 
     cv::AutoLock lock(getLayerFactoryMutex());
-    String type_ = toLowerCase(type);
-    LayerFactory_Impl::iterator it = getLayerFactoryImpl().find(type_);
+    LayerFactory_Impl::iterator it = getLayerFactoryImpl().find(type);
 
     if (it != getLayerFactoryImpl().end())
     {
         if (it->second.back() == constructor)
-            CV_Error(cv::Error::StsBadArg, "Layer \"" + type_ + "\" already was registered");
+            CV_Error(cv::Error::StsBadArg, "Layer \"" + type + "\" already was registered");
         it->second.push_back(constructor);
     }
-    getLayerFactoryImpl().insert(std::make_pair(type_, std::vector<Constructor>(1, constructor)));
+    getLayerFactoryImpl().insert(std::make_pair(type, std::vector<Constructor>(1, constructor)));
 }
 
 void LayerFactory::unregisterLayer(const String &type)
@@ -4970,9 +5048,8 @@ void LayerFactory::unregisterLayer(const String &type)
     CV_TRACE_ARG_VALUE(type, "type", type.c_str());
 
     cv::AutoLock lock(getLayerFactoryMutex());
-    String type_ = toLowerCase(type);
 
-    LayerFactory_Impl::iterator it = getLayerFactoryImpl().find(type_);
+    LayerFactory_Impl::iterator it = getLayerFactoryImpl().find(type);
     if (it != getLayerFactoryImpl().end())
     {
         if (it->second.size() > 1)
@@ -4988,8 +5065,7 @@ Ptr<Layer> LayerFactory::createLayerInstance(const String &type, LayerParams& pa
     CV_TRACE_ARG_VALUE(type, "type", type.c_str());
 
     cv::AutoLock lock(getLayerFactoryMutex());
-    String type_ = toLowerCase(type);
-    LayerFactory_Impl::const_iterator it = getLayerFactoryImpl().find(type_);
+    LayerFactory_Impl::const_iterator it = getLayerFactoryImpl().find(type);
 
     if (it != getLayerFactoryImpl().end())
     {
