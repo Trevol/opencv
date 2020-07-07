@@ -2788,7 +2788,13 @@ struct Net::Impl : public detail::NetImplBase
                         if (preferableBackend == DNN_BACKEND_CUDA &&
                             (inp_i_data->layerInstance->supportBackend(DNN_BACKEND_CUDA) == false ||
                              (inp_i_data->layerInstance->type != "Convolution" &&
-                              inp_i_data->layerInstance->type != "Pooling")))
+                              inp_i_data->layerInstance->type != "Pooling" &&
+                              inp_i_data->layerInstance->type != "Resize"  &&
+                              inp_i_data->layerInstance->type != "Flatten" &&
+                              inp_i_data->layerInstance->type != "Permute" &&
+                              inp_i_data->layerInstance->type != "Reorg" &&
+                              inp_i_data->layerInstance->type != "Eltwise" &&
+                              inp_i_data->layerInstance.dynamicCast<ActivationLayer>().empty())))
                         {
                             break;
                         }
@@ -3543,6 +3549,9 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
                 }
                 else
                 {
+#if INF_ENGINE_VER_MAJOR_GT(INF_ENGINE_RELEASE_2020_4)
+                    CV_Error(Error::StsNotImplemented, "This OpenCV version is built with Inference Engine which has dropped IR v7 support");
+#else
                     CV_TRACE_REGION("legacy_cnn_layer");
                     try
                     {
@@ -3558,6 +3567,8 @@ Net Net::Impl::createNetworkFromModelOptimizer(InferenceEngine::CNNNetwork& ieNe
                         CV_LOG_DEBUG(NULL, "IE layer extraction failure: '" << name << "' - " << e.what());
                         return false;
                     }
+#endif
+
                 }
             };
 
