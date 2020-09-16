@@ -268,6 +268,111 @@ I::IStream& operator>> (I::IStream& is,       cv::GOpaqueDesc &) {return is;}
 I::OStream& operator<< (I::OStream& os, const cv::GArrayDesc &) {return os;}
 I::IStream& operator>> (I::IStream& is,       cv::GArrayDesc &) {return is;}
 
+#if !defined(GAPI_STANDALONE)
+I::OStream& operator<< (I::OStream& os, const cv::UMat &)
+{
+    GAPI_Assert(false && "Serialization: Unsupported << for UMat");
+    return os;
+}
+I::IStream& operator >> (I::IStream& is, cv::UMat &)
+{
+    GAPI_Assert(false && "Serialization: Unsupported >> for UMat");
+    return is;
+}
+#endif // !defined(GAPI_STANDALONE)
+
+I::OStream& operator<< (I::OStream& os, const cv::gapi::wip::IStreamSource::Ptr &)
+{
+    GAPI_Assert(false && "Serialization: Unsupported << for IStreamSource::Ptr");
+    return os;
+}
+I::IStream& operator >> (I::IStream& is, cv::gapi::wip::IStreamSource::Ptr &)
+{
+    GAPI_Assert("Serialization: Unsupported >> for IStreamSource::Ptr");
+    return is;
+}
+
+namespace
+{
+template<typename Ref, typename T, typename... Ts>
+struct putToStream;
+
+template<typename Ref>
+struct putToStream<Ref, std::tuple<>>
+{
+    static void put(I::OStream&, const Ref &)
+    {
+        GAPI_Assert(false && "Unsupported type for GArray/GOpaque serialization");
+    }
+};
+
+template<typename Ref, typename T, typename... Ts>
+struct putToStream<Ref, std::tuple<T, Ts...>>
+{
+    static void put(I::OStream& os, const Ref &r)
+    {
+        if (r.getKind() == cv::detail::GOpaqueTraits<T>::kind) {
+            os << r.template rref<T>();
+        } else {
+            putToStream<Ref, std::tuple<Ts...> >::put(os, r);
+        }
+    }
+};
+
+template<typename Ref, typename T, typename... Ts>
+struct getFromStream;
+
+template<typename Ref>
+struct getFromStream<Ref, std::tuple<>>
+{
+    static void get(I::IStream&, Ref &, cv::detail::OpaqueKind)
+    {
+        GAPI_Assert(false && "Unsupported type for GArray/GOpaque deserialization");
+    }
+};
+
+template<typename Ref, typename T, typename... Ts>
+struct getFromStream<Ref, std::tuple<T, Ts...>>
+{
+    static void get(I::IStream& is, Ref &r, cv::detail::OpaqueKind kind) {
+        if (kind == cv::detail::GOpaqueTraits<T>::kind) {
+            r.template reset<T>();
+            auto& val = r.template wref<T>();
+            is >> val;
+        } else {
+            getFromStream<Ref, std::tuple<Ts...> >::get(is, r, kind);
+        }
+    }
+};
+}
+
+I::OStream& operator<< (I::OStream& os, const cv::detail::VectorRef& ref)
+{
+    os << ref.getKind();
+    putToStream<cv::detail::VectorRef, cv::detail::GOpaqueTraitsArrayTypes>::put(os, ref);
+    return os;
+}
+I::IStream& operator >> (I::IStream& is, cv::detail::VectorRef& ref)
+{
+    cv::detail::OpaqueKind kind;
+    is >> kind;
+    getFromStream<cv::detail::VectorRef, cv::detail::GOpaqueTraitsArrayTypes>::get(is, ref, kind);
+    return is;
+}
+
+I::OStream& operator<< (I::OStream& os, const cv::detail::OpaqueRef& ref)
+{
+    os << ref.getKind();
+    putToStream<cv::detail::OpaqueRef, cv::detail::GOpaqueTraitsOpaqueTypes>::put(os, ref);
+    return os;
+}
+I::IStream& operator >> (I::IStream& is, cv::detail::OpaqueRef& ref)
+{
+    cv::detail::OpaqueKind kind;
+    is >> kind;
+    getFromStream<cv::detail::OpaqueRef, cv::detail::GOpaqueTraitsOpaqueTypes>::get(is, ref, kind);
+    return is;
+}
 // Enums and structures
 
 namespace {
@@ -305,7 +410,6 @@ I::IStream& operator>> (I::IStream& is, cv::gimpl::Data::Storage &s) {
     return get_enum<cv::gimpl::Data::Storage>(is, s);
 }
 
-
 I::OStream& operator<< (I::OStream& os, const cv::GArg &arg) {
     // Only GOBJREF and OPAQUE_VAL kinds can be serialized/deserialized
     GAPI_Assert(   arg.kind == cv::detail::ArgKind::OPAQUE_VAL
@@ -331,6 +435,7 @@ I::OStream& operator<< (I::OStream& os, const cv::GArg &arg) {
     }
     return os;
 }
+
 I::IStream& operator>> (I::IStream& is, cv::GArg &arg) {
     is >> arg.kind >> arg.opaque_kind;
 
@@ -362,7 +467,6 @@ I::IStream& operator>> (I::IStream& is, cv::GArg &arg) {
     }
     return is;
 }
-
 
 I::OStream& operator<< (I::OStream& os, const cv::GKernel &k) {
     return os << k.name << k.tag << k.outShapes;
@@ -403,12 +507,50 @@ I::IStream& operator>> (I::IStream& is, cv::gimpl::Op &op) {
 I::OStream& operator<< (I::OStream& os, const cv::gimpl::Data &d) {
     // FIXME: HostCtor is not stored here!!
     // FIXME: Storage may be incorrect for subgraph-to-graph process
-    return os << d.shape << d.rc << d.meta << d.storage;
+    return os << d.shape << d.rc << d.meta << d.storage << d.kind;
 }
+
+namespace
+{
+template<typename Ref, typename T, typename... Ts>
+struct initCtor;
+
+template<typename Ref>
+struct initCtor<Ref, std::tuple<>>
+{
+    static void init(cv::gimpl::Data&)
+    {
+        GAPI_Assert(false && "Unsupported type for GArray/GOpaque deserialization");
+    }
+};
+
+template<typename Ref, typename T, typename... Ts>
+struct initCtor<Ref, std::tuple<T, Ts...>>
+{
+    static void init(cv::gimpl::Data& d) {
+        if (d.kind == cv::detail::GOpaqueTraits<T>::kind) {
+            static std::function<void(Ref&)> ctor = [](Ref& ref){ref.template reset<T>();};
+            d.ctor = ctor;
+        } else {
+            initCtor<Ref, std::tuple<Ts...> >::init(d);
+        }
+    }
+};
+} // anonymous namespace
+
 I::IStream& operator>> (I::IStream& is, cv::gimpl::Data &d) {
     // FIXME: HostCtor is not stored here!!
     // FIXME: Storage may be incorrect for subgraph-to-graph process
-    return is >> d.shape >> d.rc >> d.meta >> d.storage;
+    is >> d.shape >> d.rc >> d.meta >> d.storage >> d.kind;
+    if (d.shape == cv::GShape::GARRAY)
+    {
+        initCtor<cv::detail::VectorRef, cv::detail::GOpaqueTraitsArrayTypes>::init(d);
+    }
+    else if (d.shape == cv::GShape::GOPAQUE)
+    {
+        initCtor<cv::detail::OpaqueRef, cv::detail::GOpaqueTraitsOpaqueTypes>::init(d);
+    }
+    return is;
 }
 
 
@@ -434,6 +576,14 @@ void serialize( I::OStream& os
               , const ade::Graph &g
               , const std::vector<ade::NodeHandle> &nodes) {
     cv::gimpl::GModel::ConstGraph cg(g);
+    serialize(os, g, cg.metadata().get<cv::gimpl::Protocol>(), nodes);
+}
+
+void serialize( I::OStream& os
+              , const ade::Graph &g
+              , const cv::gimpl::Protocol &p
+              , const std::vector<ade::NodeHandle> &nodes) {
+    cv::gimpl::GModel::ConstGraph cg(g);
     GSerialized s;
     for (auto &nh : nodes) {
         switch (cg.metadata(nh).get<NodeType>().t)
@@ -444,7 +594,7 @@ void serialize( I::OStream& os
         }
     }
     s.m_counter = cg.metadata().get<cv::gimpl::DataObjectCounter>();
-    s.m_proto   = cg.metadata().get<cv::gimpl::Protocol>();
+    s.m_proto   = p;
     os << s.m_ops << s.m_datas << s.m_counter << s.m_proto;
 }
 
@@ -607,6 +757,24 @@ I::IStream& ByteMemoryInStream::operator>> (std::string& str) {
     }
     return *this;
 }
+
+GAPI_EXPORTS void serialize(I::OStream& os, const cv::GMetaArgs &ma) {
+    os << ma;
+}
+GAPI_EXPORTS void serialize(I::OStream& os, const cv::GRunArgs &ra) {
+    os << ra;
+}
+GAPI_EXPORTS GMetaArgs meta_args_deserialize(I::IStream& is) {
+    GMetaArgs s;
+    is >> s;
+    return s;
+}
+GAPI_EXPORTS GRunArgs run_args_deserialize(I::IStream& is) {
+    GRunArgs s;
+    is >> s;
+    return s;
+}
+
 
 } // namespace s11n
 } // namespace gimpl
