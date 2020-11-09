@@ -27,6 +27,7 @@ namespace gimpl {
                                 : cv::Mat(v.dims(), v.type(), v.ptr());
     }
     inline RMat::View asView(const Mat& m, RMat::View::DestroyCallback&& cb = nullptr) {
+        // FIXME: View doesn't support multidimensional cv::Mat's
         return RMat::View(cv::descr_of(m), m.data, m.step, std::move(cb));
     }
 
@@ -133,7 +134,7 @@ inline cv::util::optional<T> getCompileArg(const cv::GCompileArgs &args)
     return cv::gapi::getCompileArg<T>(args);
 }
 
-void createMat(const cv::GMatDesc& desc, cv::Mat& mat);
+void GAPI_EXPORTS createMat(const cv::GMatDesc& desc, cv::Mat& mat);
 
 }} // cv::gimpl
 
